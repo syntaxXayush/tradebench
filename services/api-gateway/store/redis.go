@@ -1,60 +1,39 @@
 package store
 
 import (
-	"sync"
+	"context"
+	"fmt"
 
-	benchtypes "github.com/bench/shared/types"
+	"github.com/redis/go-redis/v9"
 )
 
+const jobStreamKey = "stream:jobs"
+
 type RedisClient struct {
-	mu              sync.RWMutex
-	jobStream       []map[string]string
-	latestSnapshots map[string]benchtypes.MetricSnapshot
-	leaderboard     []benchtypes.LeaderboardEntry
+	client *redis.Client
 }
 
-func NewRedisClient() *RedisClient {
-	return &RedisClient{
-		latestSnapshots: make(map[string]benchtypes.MetricSnapshot),
+func NewRedisClient(addr string) (*RedisClient, error) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		return nil, fmt.Errorf("redis: ping: %w", err)
 	}
+	return &RedisClient{client: rdb}, nil
 }
 
-func (r *RedisClient) EnqueueJob(fields map[string]string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	copied := make(map[string]string, len(fields))
-	for key, value := range fields {
-		copied[key] = value
+func (r *RedisClient) EnqueueJob(ctx context.Context, fields map[string]string) error {
+	args := &redis.XAddArgs{
+		Stream: jobStreamKey,
+		Values: fields,
 	}
-	r.jobStream = append(r.jobStream, copied)
+	if err := r.client.XAdd(ctx, args).Err(); err != nil {
+		return fmt.Errorf("redis: enqueue job: %w", err)
+	}
+	return nil
 }
 
-func (r *RedisClient) SetLatestSnapshot(submissionID string, snapshot benchtypes.MetricSnapshot) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.latestSnapshots[submissionID] = snapshot
-}
-
-func (r *RedisClient) GetLatestSnapshot(submissionID string) (benchtypes.MetricSnapshot, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	snapshot, ok := r.latestSnapshots[submissionID]
-	return snapshot, ok
-}
-
-func (r *RedisClient) SetLeaderboard(entries []benchtypes.LeaderboardEntry) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.leaderboard = append([]benchtypes.LeaderboardEntry(nil), entries...)
-}
-
-func (r *RedisClient) GetLeaderboard() []benchtypes.LeaderboardEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return append([]benchtypes.LeaderboardEntry(nil), r.leaderboard...)
+func (r *RedisClient) Close() error {
+	return r.client.Close()
 }
