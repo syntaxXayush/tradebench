@@ -29,6 +29,13 @@ func (s *Spawner) Spawn(imageTag, submissionID string) (string, int, error) {
 		return "", 0, fmt.Errorf("spawner: image tag and submission id are required")
 	}
 
+	// Container name must match DNS hostname bot-fleet uses: submission-{id[:8]}
+	shortID := submissionID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	containerName := "submission-" + shortID
+
 	port, err := freePort()
 	if err != nil {
 		return "", 0, fmt.Errorf("spawner: find free port: %w", err)
@@ -38,7 +45,8 @@ func (s *Spawner) Spawn(imageTag, submissionID string) (string, int, error) {
 	ctx := context.Background()
 	resp, err := s.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image: imageTag,
+			Image:    imageTag,
+			Hostname: containerName, // DNS name on bench-net
 			ExposedPorts: nat.PortSet{
 				"8080/tcp": struct{}{},
 			},
@@ -47,19 +55,25 @@ func (s *Spawner) Spawn(imageTag, submissionID string) (string, int, error) {
 			PortBindings: nat.PortMap{
 				"8080/tcp": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: hostPort}},
 			},
-			NetworkMode:    container.NetworkMode(s.BenchNetName),
+			// Security constraints (FR-2, non-negotiable)
 			ReadonlyRootfs: true,
-			SecurityOpt:    []string{"no-new-privileges"},
+			SecurityOpt:    []string{"no-new-privileges:true"},
+			CapDrop:        []string{"ALL"},
+			PidsLimit:      int64Ptr(128),
+			Tmpfs:          map[string]string{"/tmp": "size=64m"},
 			Resources: container.Resources{
 				Memory:   512 * 1024 * 1024, // 512 MB
-				CPUQuota: 100000,             // 1 CPU
+				NanoCPUs: 1_000_000_000,     // 1.0 CPU
 			},
-			CapDrop: []string{"ALL"},
 		},
-		&network.NetworkingConfig{},
+		&network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				s.BenchNetName: {}, // bench-net only — no platform-net
+			},
+		},
 		nil,
-		"bench-"+submissionID,
-	)
+		containerName,
+		)
 	if err != nil {
 		return "", 0, fmt.Errorf("spawner: container create: %w", err)
 	}
@@ -79,3 +93,5 @@ func freePort() (int, error) {
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
+
+func int64Ptr(v int64) *int64 { return &v }
