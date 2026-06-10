@@ -7,6 +7,7 @@ import (
 
 	"github.com/bench/shared/types"
 	"github.com/bench/telemetry-ingester/ingest"
+	"github.com/bench/telemetry-ingester/scoring"
 	"github.com/bench/telemetry-ingester/store"
 )
 
@@ -17,14 +18,16 @@ type WindowManager struct {
 	windowSec int
 	buf       *ingest.RingBuffer
 	store     *store.PostgresStore
+	scorer    *scoring.Engine
 }
 
 // NewWindowManager creates a new WindowManager.
-func NewWindowManager(windowSec int, buf *ingest.RingBuffer, store *store.PostgresStore) *WindowManager {
+func NewWindowManager(windowSec int, buf *ingest.RingBuffer, store *store.PostgresStore, scorer *scoring.Engine) *WindowManager {
 	return &WindowManager{
 		windowSec: windowSec,
 		buf:       buf,
 		store:     store,
+		scorer:    scorer,
 	}
 }
 
@@ -70,7 +73,7 @@ func (wm *WindowManager) Run(ctx context.Context) {
 const ringBufferDrainSize = 20_000
 
 // computeAndPersist computes latency percentiles, TPS, and success/failure/timeout counts,
-// then persists a MetricSnapshot to the database.
+// then persists a MetricSnapshot to the database and triggers scoring.
 func (wm *WindowManager) computeAndPersist(ctx context.Context, submissionID string, events []types.BotEvent, windowEnd time.Time) {
 	// Compute latencies.
 	latencies := make([]float64, 0, len(events))
@@ -122,6 +125,15 @@ func (wm *WindowManager) computeAndPersist(ctx context.Context, submissionID str
 			"err", err,
 		)
 		return
+	}
+
+	// Trigger scoring after successful MetricSnapshot insert.
+	if err := wm.scorer.Score(ctx, snapshot); err != nil {
+		slog.Error("scoring engine failed",
+			"submissionId", snapshot.SubmissionID,
+			"err", err,
+		)
+		// A scoring failure must not crash the window manager or stop telemetry collection.
 	}
 
 	slog.Info("window tick processed",

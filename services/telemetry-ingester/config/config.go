@@ -9,6 +9,7 @@ import (
 // Config holds all telemetry-ingester configuration loaded from environment variables.
 type Config struct {
 	PostgresDSN string  // POSTGRES_DSN: PostgreSQL connection string
+	RedisAddr   string  // REDIS_ADDR: Redis server address (e.g. "redis:6379")
 	WindowSec   int     // TELEMETRY_WINDOW_SEC: aggregation window size in seconds
 	TargetTPS   float64 // BOT_TARGET_TPS: used by scoring engine
 	MaxP99Ms    float64 // BOT_MAX_P99_MS: used by scoring engine
@@ -25,6 +26,7 @@ func Load() *Config {
 
 	return &Config{
 		PostgresDSN: required("POSTGRES_DSN"),
+		RedisAddr:   required("REDIS_ADDR"),
 		WindowSec:   requiredInt("TELEMETRY_WINDOW_SEC"),
 		TargetTPS:   requiredFloat64("BOT_TARGET_TPS"),
 		MaxP99Ms:    requiredFloat64("BOT_MAX_P99_MS"),

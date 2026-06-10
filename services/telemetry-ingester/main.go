@@ -14,6 +14,7 @@ import (
 	"github.com/bench/telemetry-ingester/aggregate"
 	"github.com/bench/telemetry-ingester/config"
 	"github.com/bench/telemetry-ingester/ingest"
+	"github.com/bench/telemetry-ingester/scoring"
 	"github.com/bench/telemetry-ingester/store"
 )
 
@@ -22,6 +23,8 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
+
+	// Construction order: config → postgres → redis → scoring engine → buffer → ingest server → window manager → gRPC → signals.
 
 	cfg := config.Load()
 
@@ -32,12 +35,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Connect to Redis.
+	redisStore := store.NewRedisStore(cfg.RedisAddr)
+
+	// Create scoring engine.
+	scorer := scoring.NewEngine(cfg, pgStore, redisStore)
+
 	// Create ring buffer and gRPC server.
 	buf := ingest.NewRingBuffer()
 	srv := ingest.NewServer(buf)
 
 	// Create window manager.
-	wm := aggregate.NewWindowManager(cfg.WindowSec, buf, pgStore)
+	wm := aggregate.NewWindowManager(cfg.WindowSec, buf, pgStore, scorer)
 
 	// Create a cancellable context for the window manager.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,6 +76,7 @@ func main() {
 		cancel()
 		grpcServer.GracefulStop()
 		pgStore.Close()
+		redisStore.Close()
 		slog.Info("telemetry-ingester shutdown complete")
 	}()
 
