@@ -2,12 +2,14 @@ FROM golang:1.25-alpine AS builder
 WORKDIR /app
 COPY go.work go.work.sum ./
 COPY shared/ ./shared/
-COPY services/ ./services/
+COPY services/telemetry-ingester/ ./services/telemetry-ingester/
 WORKDIR /app/services/telemetry-ingester
-RUN go build -o /bin/service .
+RUN go build -o /bin/service ./...
 
+# Stage 2: minimal runtime
 FROM alpine:3.19
 RUN adduser -D -u 1001 appuser
 COPY --from=builder /bin/service /bin/service
 USER appuser
+EXPOSE 9003
 ENTRYPOINT ["/bin/service"]
